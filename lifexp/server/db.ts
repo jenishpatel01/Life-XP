@@ -35,6 +35,13 @@ CREATE TABLE IF NOT EXISTS sessions (
 );
 CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id);
 
+CREATE TABLE IF NOT EXISTS password_resets (
+  token_hash TEXT PRIMARY KEY,                -- sha256(token); raw token only lives in the e-mailed link
+  user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  expires_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_resets_user ON password_resets(user_id);
+
 CREATE TABLE IF NOT EXISTS profiles (
   user_id    INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
   username   TEXT NOT NULL UNIQUE COLLATE NOCASE,

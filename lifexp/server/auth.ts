@@ -96,10 +96,45 @@ const registerSchema = z
   })
   .refine((d) => d.password === d.confirmPassword, { message: 'Passwords do not match.', path: ['confirmPassword'] });
 
-const loginSchema = z.object({
-  email: z.string().trim().toLowerCase().email().max(254),
-  password: z.string().min(1).max(128),
-});
+// `identifier` is an e-mail or a username; `email` is kept as an alias for older clients.
+const loginSchema = z
+  .object({
+    identifier: z.string().trim().min(1).max(254).optional(),
+    email: z.string().trim().min(1).max(254).optional(),
+    password: z.string().min(1).max(128),
+  })
+  .transform((d) => ({ identifier: (d.identifier ?? d.email ?? '').toLowerCase(), password: d.password }))
+  .refine((d) => d.identifier.length > 0);
+
+const forgotSchema = z.object({ identifier: z.string().trim().min(1).max(254) });
+
+const resetSchema = z
+  .object({
+    token: z.string().min(20).max(200),
+    password: z.string().min(8, 'Password must be at least 8 characters.').max(128),
+    confirmPassword: z.string(),
+  })
+  .refine((d) => d.password === d.confirmPassword, { message: 'Passwords do not match.', path: ['confirmPassword'] });
+
+const RESET_MINUTES = 60;
+
+async function sendResetEmail(to: string, username: string, link: string) {
+  if (!config.resendApiKey) {
+    console.log(`[lifexp] password reset link for ${username} <${to}> (no RESEND_API_KEY set): ${link}`);
+    return;
+  }
+  const res = await fetch('https://api.resend.com/emails', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${config.resendApiKey}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      from: config.mailFrom,
+      to,
+      subject: 'Reset your LIFE//XP password',
+      text: `Hi ${username},\n\nUse this link to choose a new password (valid for ${RESET_MINUTES} minutes):\n${link}\n\nIf you didn't ask for this, you can ignore this e-mail.`,
+    }),
+  });
+  if (!res.ok) console.error('[lifexp] reset e-mail failed', res.status, await res.text().catch(() => ''));
+}
 
 export const authRouter = Router();
 
@@ -136,12 +171,63 @@ authRouter.post('/register', async (req, res, next) => {
 authRouter.post('/login', async (req, res, next) => {
   try {
     const parsed = loginSchema.safeParse(req.body);
-    if (!parsed.success) throw new AppError(400, 'VALIDATION', 'Enter your email and password.');
-    const { email, password } = parsed.data;
-    const row = db.prepare('SELECT id, password_hash FROM users WHERE email = ?').get(email) as { id: number; password_hash: string } | undefined;
+    if (!parsed.success) throw new AppError(400, 'VALIDATION', 'Enter your email or username and password.');
+    const { identifier, password } = parsed.data;
+    const row = findUser(identifier);
     const ok = await verifyPassword(password, row?.password_hash ?? (await DUMMY_HASH_PROMISE));
-    if (!row || !ok) throw new AppError(401, 'BAD_CREDENTIALS', 'Wrong email or password.');
+    if (!row || !ok) throw new AppError(401, 'BAD_CREDENTIALS', 'Wrong email/username or password.');
     createSession(req, res, row.id);
+    res.json({ ok: true });
+  } catch (e) {
+    next(e);
+  }
+});
+
+function findUser(identifier: string) {
+  return db
+    .prepare('SELECT u.id, u.email, u.password_hash, p.username FROM users u JOIN profiles p ON p.user_id = u.id WHERE u.email = ? OR p.username = ?')
+    .get(identifier, identifier) as { id: number; email: string; password_hash: string; username: string } | undefined;
+}
+
+authRouter.post('/forgot', async (req, res, next) => {
+  try {
+    const parsed = forgotSchema.safeParse(req.body);
+    if (!parsed.success) throw new AppError(400, 'VALIDATION', 'Enter your email or username.');
+    const user = findUser(parsed.data.identifier.toLowerCase());
+    if (user) {
+      const token = crypto.randomBytes(32).toString('base64url');
+      db.prepare('DELETE FROM password_resets WHERE user_id = ?').run(user.id);
+      db.prepare('INSERT INTO password_resets (token_hash, user_id, expires_at) VALUES (?, ?, ?)').run(
+        sha256(token), user.id, new Date(Date.now() + RESET_MINUTES * 60_000).toISOString(),
+      );
+      await sendResetEmail(user.email, user.username, `${config.appUrl}/auth?mode=reset&token=${token}`);
+    }
+    // Same answer whether or not the account exists, so this can't be used to probe for accounts.
+    res.json({ ok: true });
+  } catch (e) {
+    next(e);
+  }
+});
+
+authRouter.post('/reset', async (req, res, next) => {
+  try {
+    const parsed = resetSchema.safeParse(req.body);
+    if (!parsed.success) {
+      const fields: Record<string, string> = {};
+      for (const i of parsed.error.issues) fields[String(i.path[0] ?? 'form')] ??= i.message;
+      throw new AppError(400, 'VALIDATION', Object.values(fields)[0] ?? 'Check your details.', { fields });
+    }
+    const { token, password } = parsed.data;
+    const row = db.prepare('SELECT user_id, expires_at FROM password_resets WHERE token_hash = ?').get(sha256(token)) as { user_id: number; expires_at: string } | undefined;
+    if (!row || new Date(row.expires_at).getTime() < Date.now()) {
+      throw new AppError(400, 'BAD_TOKEN', 'This reset link is invalid or has expired. Request a new one.');
+    }
+    const hash = await hashPassword(password);
+    db.transaction(() => {
+      db.prepare('UPDATE users SET password_hash = ? WHERE id = ?').run(hash, row.user_id);
+      db.prepare('DELETE FROM password_resets WHERE user_id = ?').run(row.user_id);
+      db.prepare('DELETE FROM sessions WHERE user_id = ?').run(row.user_id); // sign out everywhere
+    })();
     res.json({ ok: true });
   } catch (e) {
     next(e);

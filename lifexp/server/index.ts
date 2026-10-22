@@ -49,7 +49,7 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 const dist = path.resolve(here, '../dist');
 
 app.use('/api', csrfGuard);
-app.use(['/api/auth/login', '/api/auth/register'], rateLimit({ windowMs: 15 * 60_000, limit: config.authRateLimit, standardHeaders: 'draft-7', legacyHeaders: false, message: { error: { code: 'RATE_LIMITED', message: 'Too many attempts. Try again in a few minutes.' } } }));
+app.use(['/api/auth/login', '/api/auth/register', '/api/auth/forgot', '/api/auth/reset'], rateLimit({ windowMs: 15 * 60_000, limit: config.authRateLimit, standardHeaders: 'draft-7', legacyHeaders: false, message: { error: { code: 'RATE_LIMITED', message: 'Too many attempts. Try again in a few minutes.' } } }));
 app.use('/api/auth', authRouter);
 app.use('/api', requireAuth, rateLimit({ windowMs: 60_000, limit: 240, standardHeaders: 'draft-7', legacyHeaders: false }), gameRouter);
 app.use('/api', (_req, res) => res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Unknown endpoint.' } }));
