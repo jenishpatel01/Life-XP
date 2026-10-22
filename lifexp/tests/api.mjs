@@ -11,6 +11,9 @@ const DB = path.join(os.tmpdir(), `lifexp-test-${Date.now()}.db`);
 const BASE = `http://localhost:${PORT}`;
 const env = { ...process.env, PORT: String(PORT), DATABASE_PATH: DB, MIN_QUEST_SECONDS: '0', AUTH_RATE_LIMIT: '1000' };
 const srv = spawn(process.execPath, ['--import', 'tsx', 'server/index.ts'], { env, stdio: ['ignore', 'pipe', 'pipe'] });
+let serverLog = '';
+srv.stdout.on('data', (d) => { serverLog += d; });
+srv.stderr.on('data', (d) => { serverLog += d; });
 let ok = 0, bad = 0;
 const check = (name, cond, extra = '') => { if (cond) { ok++; console.log('  ✓', name); } else { bad++; console.log('  ✗', name, extra); } };
 
@@ -111,5 +114,21 @@ try {
   check('login ok', (await a.req('POST', '/api/auth/login', { email: 'hero1@test.dev', password: 'hunter2hunter2' })).status === 200);
   const st2 = (await a.req('GET', '/api/state')).json;
   check('progress intact after re-login', st2.character.level === st.character.level && st2.stats.totalXp === st.stats.totalXp && st2.settings.music === true);
+
+  console.log('FORGOT / RESET PASSWORD');
+  a.cookie = '';
+  check('login by username ok', (await a.req('POST', '/api/auth/login', { identifier: 'hero1', password: 'hunter2hunter2' })).status === 200);
+  check('forgot unknown account still 200', (await a.req('POST', '/api/auth/forgot', { identifier: 'nobody-here' })).status === 200);
+  check('forgot known account 200', (await a.req('POST', '/api/auth/forgot', { identifier: 'hero1' })).status === 200);
+  await new Promise((r) => setTimeout(r, 300));
+  const token = /mode=reset&token=([\w-]+)/.exec(serverLog)?.[1];
+  check('reset link logged', !!token);
+  check('bad token rejected', (await a.req('POST', '/api/auth/reset', { token: 'x'.repeat(43), password: 'newpassword1', confirmPassword: 'newpassword1' })).status === 400);
+  check('mismatched reset rejected', (await a.req('POST', '/api/auth/reset', { token, password: 'newpassword1', confirmPassword: 'nope' })).status === 400);
+  check('reset ok', (await a.req('POST', '/api/auth/reset', { token, password: 'newpassword1', confirmPassword: 'newpassword1' })).status === 200);
+  check('reset token single-use', (await a.req('POST', '/api/auth/reset', { token, password: 'another-pass1', confirmPassword: 'another-pass1' })).status === 400);
+  check('old password rejected', (await a.req('POST', '/api/auth/login', { identifier: 'hero1', password: 'hunter2hunter2' })).status === 401);
+  check('new password works by email', (await a.req('POST', '/api/auth/login', { identifier: 'hero1@test.dev', password: 'newpassword1' })).status === 200);
+  check('new password works by username', (await a.req('POST', '/api/auth/login', { identifier: 'hero1', password: 'newpassword1' })).status === 200);
 } catch (e) { bad++; console.error('FATAL', e); }
 finally { srv.kill(); for (const f of [DB, DB + '-wal', DB + '-shm']) try { fs.unlinkSync(f); } catch {} console.log(`\n${ok} passed, ${bad} failed`); process.exit(bad ? 1 : 0); }

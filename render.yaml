@@ -1,0 +1,24 @@
+services:
+  - type: web
+    name: life-xp
+    runtime: node
+    rootDir: lifexp
+    plan: starter # persistent disks need a paid instance
+    buildCommand: npm install --include=dev && npm run build
+    startCommand: npm start
+    healthCheckPath: /api/auth/me
+    disk:
+      name: lifexp-data
+      mountPath: /var/data
+      sizeGB: 1
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: DATABASE_PATH
+        value: /var/data/lifexp.db
+      - key: COOKIE_SECURE
+        value: "1"
+      - key: APP_URL
+        sync: false # set to your Render URL, e.g. https://life-xp.onrender.com
+      - key: RESEND_API_KEY
+        sync: false # optional, for emailing reset links

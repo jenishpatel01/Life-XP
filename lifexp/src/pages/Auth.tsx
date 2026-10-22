@@ -1,14 +1,14 @@
 import { useMemo, useState } from 'react';
 import { Navigate, useNavigate, useSearchParams } from 'react-router-dom';
 import { useGame } from '@/lib/store.ts';
-import { ApiError } from '@/lib/api.ts';
+import { api, ApiError } from '@/lib/api.ts';
 import { sfx } from '@/audio/engine.ts';
 import AnimatedBackground from '@/fx/AnimatedBackground.tsx';
 import { Button, Field, Logo } from '@/components/ui.tsx';
 import { HeroSprite } from '@/components/Sprite.tsx';
 import { DEFAULT_APPEARANCE } from '@shared/content.ts';
 
-type Mode = 'register' | 'login';
+type Mode = 'register' | 'login' | 'forgot' | 'reset';
 const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
 
 function strength(pw: string) {
@@ -23,7 +23,10 @@ const STRENGTH = ['TOO WEAK', 'WEAK', 'OKAY', 'GOOD', 'STRONG'];
 
 export default function Auth() {
   const [params, setParams] = useSearchParams();
-  const mode: Mode = params.get('mode') === 'login' ? 'login' : 'register';
+  const m = params.get('mode');
+  const token = params.get('token') ?? '';
+  const mode: Mode = m === 'login' ? 'login' : m === 'forgot' ? 'forgot' : m === 'reset' && token ? 'reset' : 'register';
+  const isNewPw = mode === 'register' || mode === 'reset';
   const user = useGame((s) => s.user);
   const register = useGame((s) => s.register);
   const login = useGame((s) => s.login);
@@ -34,6 +37,7 @@ export default function Auth() {
   const [formErr, setFormErr] = useState('');
   const [show, setShow] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [info, setInfo] = useState('');
   const [shake, setShake] = useState(0);
   const str = useMemo(() => strength(v.password), [v.password]);
 
@@ -48,11 +52,12 @@ export default function Auth() {
       else if (!/^[A-Za-z0-9_]+$/.test(v.username.trim())) e.username = 'Use letters, numbers and underscores only.';
       else if (v.username.trim().length > 20) e.username = 'Username can be at most 20 characters.';
     }
-    if (!EMAIL.test(v.email.trim())) e.email = 'Enter a valid email address.';
-    if (mode === 'register') {
+    if (mode === 'register' && !EMAIL.test(v.email.trim())) e.email = 'Enter a valid email address.';
+    if ((mode === 'login' || mode === 'forgot') && !v.email.trim()) e.email = 'Enter your email or username.';
+    if (isNewPw) {
       if (v.password.length < 8) e.password = 'Password must be at least 8 characters.';
       if (v.confirmPassword !== v.password) e.confirmPassword = 'Passwords do not match.';
-    } else if (!v.password) e.password = 'Enter your password.';
+    } else if (mode === 'login' && !v.password) e.password = 'Enter your password.';
     return e;
   };
 
@@ -65,8 +70,20 @@ export default function Auth() {
     if (Object.keys(e).length) { setShake((n) => n + 1); sfx.play('error'); return; }
     setLoading(true);
     try {
+      if (mode === 'forgot') {
+        await api('/auth/forgot', { method: 'POST', body: { identifier: v.email.trim() } });
+        setInfo('If that account exists, we sent a reset link to its email. Check your inbox (and spam).');
+        return;
+      }
+      if (mode === 'reset') {
+        await api('/auth/reset', { method: 'POST', body: { token, password: v.password, confirmPassword: v.confirmPassword } });
+        setV((p) => ({ ...p, password: '', confirmPassword: '' }));
+        setParams({ mode: 'login' }, { replace: true });
+        setInfo('Password updated. Log in with your email or username and the new password.');
+        return;
+      }
       if (mode === 'register') await register({ username: v.username.trim(), email: v.email.trim(), password: v.password, confirmPassword: v.confirmPassword });
-      else await login({ email: v.email.trim(), password: v.password });
+      else await login({ identifier: v.email.trim(), password: v.password });
       sfx.play('login');
       nav(mode === 'register' ? '/create' : '/app', { replace: true });
     } catch (err) {
@@ -80,7 +97,7 @@ export default function Auth() {
     }
   };
 
-  const switchTo = (m: Mode) => { setErrs({}); setFormErr(''); setParams({ mode: m }, { replace: true }); };
+  const switchTo = (m: Mode) => { setErrs({}); setFormErr(''); setInfo(''); setParams({ mode: m }, { replace: true }); };
   const eid = (k: string) => (errs[k] ? { 'aria-invalid': true, 'aria-describedby': `${k}-err` } : {});
 
   return (
@@ -96,26 +113,38 @@ export default function Auth() {
         <form key={shake} className={`auth-card panel ${shake ? 'shake-x' : ''}`} onSubmit={submit} noValidate aria-labelledby="auth-h">
           <div className="auth-tabs" role="tablist">
             <button type="button" role="tab" aria-selected={mode === 'register'} className={mode === 'register' ? 'is-on' : ''} onClick={() => switchTo('register')} data-testid="tab-register">SIGN UP</button>
-            <button type="button" role="tab" aria-selected={mode === 'login'} className={mode === 'login' ? 'is-on' : ''} onClick={() => switchTo('login')} data-testid="tab-login">LOG IN</button>
+            <button type="button" role="tab" aria-selected={mode !== 'register'} className={mode !== 'register' ? 'is-on' : ''} onClick={() => switchTo('login')} data-testid="tab-login">LOG IN</button>
           </div>
-          <h1 id="auth-h" className="pixel auth-title">{mode === 'register' ? 'CREATE YOUR ACCOUNT' : 'WELCOME BACK, HERO'}</h1>
+          <h1 id="auth-h" className="pixel auth-title">
+            {mode === 'register' ? 'CREATE YOUR ACCOUNT' : mode === 'forgot' ? 'FORGOT PASSWORD' : mode === 'reset' ? 'CHOOSE A NEW PASSWORD' : 'WELCOME BACK, HERO'}
+          </h1>
           {formErr && <div className="form-error" role="alert" data-testid="form-error">{formErr}</div>}
+          {info && <div className="form-error" role="status" data-testid="form-info" style={{ borderColor: 'var(--cyan, #19d3ff)', color: 'inherit' }}>{info}</div>}
 
           {mode === 'register' && (
             <Field label="Username" htmlFor="username" error={errs.username}>
               <input id="username" className={`input ${errs.username ? 'is-error' : ''}`} value={v.username} onChange={set('username')} autoComplete="username" maxLength={20} placeholder="HeroName" {...eid('username')} />
             </Field>
           )}
-          <Field label="Email" htmlFor="email" error={errs.email}>
-            <input id="email" type="email" className={`input ${errs.email ? 'is-error' : ''}`} value={v.email} onChange={set('email')} autoComplete="email" placeholder="you@example.com" {...eid('email')} />
-          </Field>
-          <Field label="Password" htmlFor="password" error={errs.password}>
-            <div className="input-wrap">
-              <input id="password" type={show ? 'text' : 'password'} className={`input ${errs.password ? 'is-error' : ''}`} value={v.password} onChange={set('password')} autoComplete={mode === 'register' ? 'new-password' : 'current-password'} maxLength={128} {...eid('password')} />
-              <button type="button" className="toggle-vis icon-btn" onClick={() => setShow((s) => !s)} aria-label={show ? 'Hide password' : 'Show password'} aria-pressed={show} data-silent>{show ? '◉' : '◎'}</button>
-            </div>
-          </Field>
-          {mode === 'register' && (
+          {mode !== 'reset' && (
+            <Field label={mode === 'register' ? 'Email' : 'Email or username'} htmlFor="email" error={errs.email}>
+              <input id="email" type={mode === 'register' ? 'email' : 'text'} className={`input ${errs.email ? 'is-error' : ''}`} value={v.email} onChange={set('email')} autoComplete={mode === 'register' ? 'email' : 'username'} placeholder={mode === 'register' ? 'you@example.com' : 'you@example.com or HeroName'} {...eid('email')} />
+            </Field>
+          )}
+          {mode !== 'forgot' && (
+            <Field label={mode === 'reset' ? 'New password' : 'Password'} htmlFor="password" error={errs.password}>
+              <div className="input-wrap">
+                <input id="password" type={show ? 'text' : 'password'} className={`input ${errs.password ? 'is-error' : ''}`} value={v.password} onChange={set('password')} autoComplete={isNewPw ? 'new-password' : 'current-password'} maxLength={128} {...eid('password')} />
+                <button type="button" className="toggle-vis icon-btn" onClick={() => setShow((s) => !s)} aria-label={show ? 'Hide password' : 'Show password'} aria-pressed={show} data-silent>{show ? '◉' : '◎'}</button>
+              </div>
+            </Field>
+          )}
+          {mode === 'login' && (
+            <p className="auth-alt muted small" style={{ textAlign: 'right' }}>
+              <button type="button" className="link-more" onClick={() => switchTo('forgot')} data-testid="forgot-link">FORGOT PASSWORD?</button>
+            </p>
+          )}
+          {isNewPw && (
             <>
               <div className="pw-meter" aria-live="polite" data-testid="pw-meter">
                 <div className="pw-bars">{[0, 1, 2, 3].map((i) => <i key={i} className={i < str ? `on s${str}` : ''} />)}</div>
@@ -127,11 +156,11 @@ export default function Auth() {
             </>
           )}
           <Button type="submit" variant={mode === 'register' ? 'gold' : 'primary'} size="lg" block loading={loading} data-testid="auth-submit">
-            {mode === 'register' ? 'Create your character' : 'Enter the game'}
+            {mode === 'register' ? 'Create your character' : mode === 'forgot' ? 'Send reset link' : mode === 'reset' ? 'Save new password' : 'Enter the game'}
           </Button>
           <p className="auth-alt muted small">
-            {mode === 'register' ? 'Already a hero?' : 'New here?'}{' '}
-            <button type="button" className="link-more" onClick={() => switchTo(mode === 'register' ? 'login' : 'register')}>{mode === 'register' ? 'LOG IN' : 'SIGN UP'}</button>
+            {mode === 'register' ? 'Already a hero?' : mode === 'login' ? 'New here?' : 'Remembered it?'}{' '}
+            <button type="button" className="link-more" onClick={() => switchTo(mode === 'login' ? 'register' : mode === 'register' ? 'login' : 'login')}>{mode === 'login' ? 'SIGN UP' : 'LOG IN'}</button>
           </p>
         </form>
       </div>

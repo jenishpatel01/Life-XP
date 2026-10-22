@@ -19,7 +19,7 @@ interface GameStore {
 
   init: () => Promise<void>;
   register: (v: { username: string; email: string; password: string; confirmPassword: string }) => Promise<void>;
-  login: (v: { email: string; password: string }) => Promise<void>;
+  login: (v: { identifier: string; password: string }) => Promise<void>;
   logout: () => Promise<void>;
   refresh: () => Promise<void>;
   createCharacter: (v: { name: string; class: ClassId; appearance: Appearance }) => Promise<void>;
