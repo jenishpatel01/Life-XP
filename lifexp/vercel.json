@@ -1,6 +1,6 @@
 {
   "rewrites": [
-    { "source": "/api/:path*", "destination": "https://life-xp.onrender.com/api/:path*" },
+    { "source": "/api/:path*", "destination": "https://life-xp-1.onrender.com/api/:path*" },
     { "source": "/((?!api/).*)", "destination": "/index.html" }
   ]
 }
