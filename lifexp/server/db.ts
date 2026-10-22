@@ -35,12 +35,13 @@ CREATE TABLE IF NOT EXISTS sessions (
 );
 CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id);
 
-CREATE TABLE IF NOT EXISTS password_resets (
-  token_hash TEXT PRIMARY KEY,                -- sha256(token); raw token only lives in the e-mailed link
-  user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  expires_at TEXT NOT NULL
+DROP TABLE IF EXISTS password_resets;
+CREATE TABLE IF NOT EXISTS password_reset_codes (
+  user_id    INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+  code_hash  TEXT NOT NULL,                   -- sha256(userId:code); the raw 6-digit code only lives in the e-mail
+  expires_at TEXT NOT NULL,
+  attempts   INTEGER NOT NULL DEFAULT 0
 );
-CREATE INDEX IF NOT EXISTS idx_resets_user ON password_resets(user_id);
 
 CREATE TABLE IF NOT EXISTS profiles (
   user_id    INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,

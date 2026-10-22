@@ -5,11 +5,11 @@ export const config = {
   /** Proxy hops in front of the server (Render = 1; Vercel -> Render = 2) so req.ip is the real visitor. */
   trustProxy: Number(process.env.TRUST_PROXY ?? 1),
   authRateLimit: Number(process.env.AUTH_RATE_LIMIT ?? 40),
-  /** Public origin used in password-reset links. */
-  appUrl: (process.env.APP_URL ?? 'http://localhost:5173').replace(/\/+$/, ''),
-  /** Optional: send reset e-mails through Resend. Without it the link is printed to the server log. */
-  resendApiKey: process.env.RESEND_API_KEY ?? '',
-  mailFrom: process.env.MAIL_FROM ?? 'LIFE//XP <onboarding@resend.dev>',
+  /** Optional: send reset codes through Brevo's HTTP API. Without it the code is printed to the server log. */
+  brevoApiKey: process.env.BREVO_API_KEY ?? '',
+  /** Sender address; must be a verified sender in Brevo. */
+  mailFromEmail: process.env.MAIL_FROM_EMAIL ?? '',
+  mailFromName: process.env.MAIL_FROM_NAME ?? 'LIFE//XP',
 };
 
 export const minQuestSeconds = (): number => {

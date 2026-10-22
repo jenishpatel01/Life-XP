@@ -110,27 +110,30 @@ const forgotSchema = z.object({ identifier: z.string().trim().min(1).max(254) })
 
 const resetSchema = z
   .object({
-    token: z.string().min(20).max(200),
+    identifier: z.string().trim().min(1).max(254),
+    code: z.string().trim().regex(/^\d{6}$/, 'Enter the 6-digit code from your email.'),
     password: z.string().min(8, 'Password must be at least 8 characters.').max(128),
     confirmPassword: z.string(),
   })
   .refine((d) => d.password === d.confirmPassword, { message: 'Passwords do not match.', path: ['confirmPassword'] });
 
-const RESET_MINUTES = 60;
+const RESET_MINUTES = 15;
+const MAX_CODE_ATTEMPTS = 5;
+const codeHash = (userId: number, code: string) => sha256(`${userId}:${code}`);
 
-async function sendResetEmail(to: string, username: string, link: string) {
-  if (!config.resendApiKey) {
-    console.log(`[lifexp] password reset link for ${username} <${to}> (no RESEND_API_KEY set): ${link}`);
+async function sendResetEmail(to: string, username: string, code: string) {
+  if (!config.brevoApiKey || !config.mailFromEmail) {
+    console.log(`[lifexp] password reset code for ${username} <${to}> (BREVO_API_KEY / MAIL_FROM_EMAIL not set): ${code}`);
     return;
   }
-  const res = await fetch('https://api.resend.com/emails', {
+  const res = await fetch('https://api.brevo.com/v3/smtp/email', {
     method: 'POST',
-    headers: { Authorization: `Bearer ${config.resendApiKey}`, 'Content-Type': 'application/json' },
+    headers: { 'api-key': config.brevoApiKey, 'Content-Type': 'application/json', accept: 'application/json' },
     body: JSON.stringify({
-      from: config.mailFrom,
-      to,
-      subject: 'Reset your LIFE//XP password',
-      text: `Hi ${username},\n\nUse this link to choose a new password (valid for ${RESET_MINUTES} minutes):\n${link}\n\nIf you didn't ask for this, you can ignore this e-mail.`,
+      sender: { email: config.mailFromEmail, name: config.mailFromName },
+      to: [{ email: to }],
+      subject: `Your LIFE//XP reset code: ${code}`,
+      textContent: `Hi ${username},\n\nYour LIFE//XP password reset code is: ${code}\n\nIt expires in ${RESET_MINUTES} minutes. If you didn't ask for this, you can ignore this email.`,
     }),
   });
   if (!res.ok) console.error('[lifexp] reset e-mail failed', res.status, await res.text().catch(() => ''));
@@ -195,12 +198,11 @@ authRouter.post('/forgot', async (req, res, next) => {
     if (!parsed.success) throw new AppError(400, 'VALIDATION', 'Enter your email or username.');
     const user = findUser(parsed.data.identifier.toLowerCase());
     if (user) {
-      const token = crypto.randomBytes(32).toString('base64url');
-      db.prepare('DELETE FROM password_resets WHERE user_id = ?').run(user.id);
-      db.prepare('INSERT INTO password_resets (token_hash, user_id, expires_at) VALUES (?, ?, ?)').run(
-        sha256(token), user.id, new Date(Date.now() + RESET_MINUTES * 60_000).toISOString(),
+      const code = String(crypto.randomInt(0, 1_000_000)).padStart(6, '0');
+      db.prepare('INSERT OR REPLACE INTO password_reset_codes (user_id, code_hash, expires_at, attempts) VALUES (?, ?, ?, 0)').run(
+        user.id, codeHash(user.id, code), new Date(Date.now() + RESET_MINUTES * 60_000).toISOString(),
       );
-      await sendResetEmail(user.email, user.username, `${config.appUrl}/auth?mode=reset&token=${token}`);
+      await sendResetEmail(user.email, user.username, code);
     }
     // Same answer whether or not the account exists, so this can't be used to probe for accounts.
     res.json({ ok: true });
@@ -217,16 +219,22 @@ authRouter.post('/reset', async (req, res, next) => {
       for (const i of parsed.error.issues) fields[String(i.path[0] ?? 'form')] ??= i.message;
       throw new AppError(400, 'VALIDATION', Object.values(fields)[0] ?? 'Check your details.', { fields });
     }
-    const { token, password } = parsed.data;
-    const row = db.prepare('SELECT user_id, expires_at FROM password_resets WHERE token_hash = ?').get(sha256(token)) as { user_id: number; expires_at: string } | undefined;
-    if (!row || new Date(row.expires_at).getTime() < Date.now()) {
-      throw new AppError(400, 'BAD_TOKEN', 'This reset link is invalid or has expired. Request a new one.');
+    const { identifier, code, password } = parsed.data;
+    const bad = () => new AppError(400, 'BAD_CODE', 'That code is wrong or has expired. Request a new one.', { fields: { code: 'Wrong or expired code.' } });
+    const user = findUser(identifier.toLowerCase());
+    const row = user && db.prepare('SELECT code_hash, expires_at, attempts FROM password_reset_codes WHERE user_id = ?').get(user.id) as { code_hash: string; expires_at: string; attempts: number } | undefined;
+    if (!user || !row || row.attempts >= MAX_CODE_ATTEMPTS || new Date(row.expires_at).getTime() < Date.now()) throw bad();
+    const given = Buffer.from(codeHash(user.id, code));
+    const want = Buffer.from(row.code_hash);
+    if (given.length !== want.length || !crypto.timingSafeEqual(given, want)) {
+      db.prepare('UPDATE password_reset_codes SET attempts = attempts + 1 WHERE user_id = ?').run(user.id);
+      throw bad();
     }
     const hash = await hashPassword(password);
     db.transaction(() => {
-      db.prepare('UPDATE users SET password_hash = ? WHERE id = ?').run(hash, row.user_id);
-      db.prepare('DELETE FROM password_resets WHERE user_id = ?').run(row.user_id);
-      db.prepare('DELETE FROM sessions WHERE user_id = ?').run(row.user_id); // sign out everywhere
+      db.prepare('UPDATE users SET password_hash = ? WHERE id = ?').run(hash, user.id);
+      db.prepare('DELETE FROM password_reset_codes WHERE user_id = ?').run(user.id);
+      db.prepare('DELETE FROM sessions WHERE user_id = ?').run(user.id); // sign out everywhere
     })();
     res.json({ ok: true });
   } catch (e) {

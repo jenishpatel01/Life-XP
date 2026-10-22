@@ -24,15 +24,14 @@ const STRENGTH = ['TOO WEAK', 'WEAK', 'OKAY', 'GOOD', 'STRONG'];
 export default function Auth() {
   const [params, setParams] = useSearchParams();
   const m = params.get('mode');
-  const token = params.get('token') ?? '';
-  const mode: Mode = m === 'login' ? 'login' : m === 'forgot' ? 'forgot' : m === 'reset' && token ? 'reset' : 'register';
+  const mode: Mode = m === 'login' ? 'login' : m === 'forgot' ? 'forgot' : m === 'reset' ? 'reset' : 'register';
   const isNewPw = mode === 'register' || mode === 'reset';
   const user = useGame((s) => s.user);
   const register = useGame((s) => s.register);
   const login = useGame((s) => s.login);
   const nav = useNavigate();
 
-  const [v, setV] = useState({ username: '', email: '', password: '', confirmPassword: '' });
+  const [v, setV] = useState({ username: '', email: '', password: '', confirmPassword: '', code: '' });
   const [errs, setErrs] = useState<Record<string, string>>({});
   const [formErr, setFormErr] = useState('');
   const [show, setShow] = useState(false);
@@ -53,7 +52,8 @@ export default function Auth() {
       else if (v.username.trim().length > 20) e.username = 'Username can be at most 20 characters.';
     }
     if (mode === 'register' && !EMAIL.test(v.email.trim())) e.email = 'Enter a valid email address.';
-    if ((mode === 'login' || mode === 'forgot') && !v.email.trim()) e.email = 'Enter your email or username.';
+    if (mode !== 'register' && !v.email.trim()) e.email = 'Enter your email or username.';
+    if (mode === 'reset' && !/^\d{6}$/.test(v.code.trim())) e.code = 'Enter the 6-digit code from your email.';
     if (isNewPw) {
       if (v.password.length < 8) e.password = 'Password must be at least 8 characters.';
       if (v.confirmPassword !== v.password) e.confirmPassword = 'Passwords do not match.';
@@ -72,12 +72,13 @@ export default function Auth() {
     try {
       if (mode === 'forgot') {
         await api('/auth/forgot', { method: 'POST', body: { identifier: v.email.trim() } });
-        setInfo('If that account exists, we sent a reset link to its email. Check your inbox (and spam).');
+        setParams({ mode: 'reset' }, { replace: true });
+        setInfo('If that account exists, we emailed it a 6-digit code (valid 15 minutes). Check your inbox and spam folder.');
         return;
       }
       if (mode === 'reset') {
-        await api('/auth/reset', { method: 'POST', body: { token, password: v.password, confirmPassword: v.confirmPassword } });
-        setV((p) => ({ ...p, password: '', confirmPassword: '' }));
+        await api('/auth/reset', { method: 'POST', body: { identifier: v.email.trim(), code: v.code.trim(), password: v.password, confirmPassword: v.confirmPassword } });
+        setV((p) => ({ ...p, password: '', confirmPassword: '', code: '' }));
         setParams({ mode: 'login' }, { replace: true });
         setInfo('Password updated. Log in with your email or username and the new password.');
         return;
@@ -116,7 +117,7 @@ export default function Auth() {
             <button type="button" role="tab" aria-selected={mode !== 'register'} className={mode !== 'register' ? 'is-on' : ''} onClick={() => switchTo('login')} data-testid="tab-login">LOG IN</button>
           </div>
           <h1 id="auth-h" className="pixel auth-title">
-            {mode === 'register' ? 'CREATE YOUR ACCOUNT' : mode === 'forgot' ? 'FORGOT PASSWORD' : mode === 'reset' ? 'CHOOSE A NEW PASSWORD' : 'WELCOME BACK, HERO'}
+            {mode === 'register' ? 'CREATE YOUR ACCOUNT' : mode === 'forgot' ? 'FORGOT PASSWORD' : mode === 'reset' ? 'RESET PASSWORD' : 'WELCOME BACK, HERO'}
           </h1>
           {formErr && <div className="form-error" role="alert" data-testid="form-error">{formErr}</div>}
           {info && <div className="form-error" role="status" data-testid="form-info" style={{ borderColor: 'var(--cyan, #19d3ff)', color: 'inherit' }}>{info}</div>}
@@ -126,9 +127,14 @@ export default function Auth() {
               <input id="username" className={`input ${errs.username ? 'is-error' : ''}`} value={v.username} onChange={set('username')} autoComplete="username" maxLength={20} placeholder="HeroName" {...eid('username')} />
             </Field>
           )}
-          {mode !== 'reset' && (
+          {(
             <Field label={mode === 'register' ? 'Email' : 'Email or username'} htmlFor="email" error={errs.email}>
               <input id="email" type={mode === 'register' ? 'email' : 'text'} className={`input ${errs.email ? 'is-error' : ''}`} value={v.email} onChange={set('email')} autoComplete={mode === 'register' ? 'email' : 'username'} placeholder={mode === 'register' ? 'you@example.com' : 'you@example.com or HeroName'} {...eid('email')} />
+            </Field>
+          )}
+          {mode === 'reset' && (
+            <Field label="6-digit code" htmlFor="code" error={errs.code}>
+              <input id="code" className={`input ${errs.code ? 'is-error' : ''}`} value={v.code} onChange={set('code')} inputMode="numeric" autoComplete="one-time-code" maxLength={6} placeholder="123456" {...eid('code')} />
             </Field>
           )}
           {mode !== 'forgot' && (
@@ -156,7 +162,7 @@ export default function Auth() {
             </>
           )}
           <Button type="submit" variant={mode === 'register' ? 'gold' : 'primary'} size="lg" block loading={loading} data-testid="auth-submit">
-            {mode === 'register' ? 'Create your character' : mode === 'forgot' ? 'Send reset link' : mode === 'reset' ? 'Save new password' : 'Enter the game'}
+            {mode === 'register' ? 'Create your character' : mode === 'forgot' ? 'Email me a code' : mode === 'reset' ? 'Save new password' : 'Enter the game'}
           </Button>
           <p className="auth-alt muted small">
             {mode === 'register' ? 'Already a hero?' : mode === 'login' ? 'New here?' : 'Remembered it?'}{' '}

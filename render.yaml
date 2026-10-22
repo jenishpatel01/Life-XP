@@ -14,7 +14,7 @@ services:
         value: "1"
       - key: TRUST_PROXY
         value: "2" # Vercel rewrite + Render load balancer
-      - key: APP_URL
-        sync: false # your VERCEL site URL, e.g. https://life-xp.vercel.app (used in reset links)
-      - key: RESEND_API_KEY
-        sync: false # optional, for emailing reset links
+      - key: BREVO_API_KEY
+        sync: false # for emailing password-reset codes
+      - key: MAIL_FROM_EMAIL
+        sync: false # sender address verified in Brevo
