@@ -12,7 +12,9 @@ services:
         value: production
       - key: COOKIE_SECURE
         value: "1"
+      - key: TRUST_PROXY
+        value: "2" # Vercel rewrite + Render load balancer
       - key: APP_URL
-        sync: false # set to your Render URL, e.g. https://life-xp.onrender.com
+        sync: false # your VERCEL site URL, e.g. https://life-xp.vercel.app (used in reset links)
       - key: RESEND_API_KEY
         sync: false # optional, for emailing reset links

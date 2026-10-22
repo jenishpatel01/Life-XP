@@ -2,6 +2,8 @@ export const config = {
   port: Number(process.env.PORT ?? 8787),
   isProd: process.env.NODE_ENV === 'production',
   cookieSecure: process.env.COOKIE_SECURE === '1' || process.env.NODE_ENV === 'production' && process.env.COOKIE_SECURE !== '0',
+  /** Proxy hops in front of the server (Render = 1; Vercel -> Render = 2) so req.ip is the real visitor. */
+  trustProxy: Number(process.env.TRUST_PROXY ?? 1),
   authRateLimit: Number(process.env.AUTH_RATE_LIMIT ?? 40),
   /** Public origin used in password-reset links. */
   appUrl: (process.env.APP_URL ?? 'http://localhost:5173').replace(/\/+$/, ''),
